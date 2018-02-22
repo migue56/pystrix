@@ -42,6 +42,7 @@ import time
 import traceback
 import types
 import warnings
+import sys
 
 try:
     import queue
@@ -72,6 +73,7 @@ KEY_RESPONSE = 'Response' #The key used to hold the event-name of a request
 _CALLBACK_TYPE_REFERENCE = 1 #Identifies a callback-definition as an event-reference
 _CALLBACK_TYPE_UNIVERSAL = 2 #Identifies a callback-definition as universal
 _CALLBACK_TYPE_ORPHANED = 3 #Identifies a callback-definition for orphaned responses
+
 
 def _format_socket_error(exception):
     """
@@ -108,7 +110,6 @@ class Manager(object):
     _message_reader = None #A thread that continuously collects messages from the Asterisk server
     _orphaned_response_timeout = None #The number of seconds to hold on to request-responses before considering them to be timed-out
     _outstanding_requests = None #A dictionary of ActionIDs sent to Asterisk, currently awaiting responses; values are a tuple of (events, pending_finalisers), if synchronous, and None otherwise
-    _logger = None #A logger that may be used to record warnings
     
     def __init__(self, debug=False, logger=None, aggregate_timeout=5, orphaned_response_timeout=5):
         """
@@ -515,7 +516,7 @@ class Manager(object):
             
         (command, action_id) = request.build_request(action_id and str(action_id), self._get_host_action_id, **kwargs)
         events = self._add_outstanding_request(action_id, request)
-        with self._connection_lock:
+        with self._connection_lock:          
             self._connection.send_message(command)
             
         if request.aggregate and not request.synchronous: #Set up aggregate-event generation
@@ -553,6 +554,7 @@ class Manager(object):
                 })
                 
         self._serve_outstanding_request(action_id) #Get the ActionID out of circulation
+        
         if response:
             return _Response(
                 processed_response,
@@ -902,7 +904,7 @@ class _Request(dict):
         The 'Action' line is always first.
         """
         items = [(KEY_ACTION, self[KEY_ACTION])]
-        for (key, value) in [(k, v) for (k, v) in self.items() if not k in (KEY_ACTION, KEY_ACTIONID)] + kwargs.items():
+        for (key, value) in [(k, v) for (k, v) in self.items() if not k in (KEY_ACTION, KEY_ACTIONID)] + list(kwargs.items()):
             key = str(key)
             if type(value) in (tuple, list, set, frozenset):
                 for val in value:
@@ -1163,6 +1165,8 @@ class _SynchronisedSocket(object):
             raise ManagerSocketError("Not connected to Asterisk server")
             
         with self._socket_write_lock:
+            if isinstance(message,str):
+                 message = bytes(message.encode() )
             try:
                 self._socket.sendall(message)
             except socket.error as e:
